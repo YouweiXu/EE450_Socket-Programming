@@ -1,0 +1,341 @@
+#include<stdio.h>
+#include<stdlib.h>
+#include<unistd.h>
+#include<errno.h>
+#include<sys/types.h>
+#include<string.h>
+#include<netdb.h>
+#include<netinet/in.h>
+#include<sys/socket.h>
+#include<arpa/inet.h>
+#include<sys/wait.h>
+
+#define PORT1 34941 //TCP port number of AWS
+#define PORT2 33941 //UDP port number of AWS
+#define PORTA 30941 //ServerA port number
+#define PORTB 31941 //ServerB port number
+#define PORTC 32941 //ServerC port number
+
+//define a struct for sending and receiving results between C/AWS/Client 
+struct C_To_Aws
+{
+    char Path[10];
+    float dist;
+    float trans;
+    float prop;
+    int flag; // sending to client and client will print msg on screen according to flag
+}recvC;
+
+
+//**** all codes about TCP/UDP connection refer to GreekforGreeks****//
+int main()
+{   
+    
+    //phase 1:parent socket and child socket boot up
+    //create TCP socket
+    int socketfd = 0;
+    struct sockaddr_in awsaddr_tcp = {0}; 
+    struct sockaddr_in clientaddr = {0};
+    socklen_t clientlen = sizeof(clientaddr);
+    memset(&awsaddr_tcp,0,sizeof(awsaddr_tcp));
+    memset(&clientaddr,0,sizeof(clientaddr));
+
+    if((socketfd = socket(AF_INET, SOCK_STREAM,IPPROTO_TCP))>=0)
+    {
+        printf("The AWS is up and running.\n");
+    }
+    else
+    {
+        perror("socket error\n");
+    }
+
+    awsaddr_tcp.sin_family  = AF_INET;
+    awsaddr_tcp.sin_port  = htons(PORT1);
+    awsaddr_tcp.sin_addr.s_addr = inet_addr("127.0.0.1"); //htonl(INADDR_ANY);
+
+    //bind TCP socket
+    if(bind(socketfd,(struct sockaddr*)&awsaddr_tcp,sizeof(awsaddr_tcp)) == -1)
+    {
+        perror("bind error\n");
+    }
+
+    if((listen(socketfd,SOMAXCONN)) == -1)
+    {
+        perror("listen error\n");
+    }
+
+    //child socket connect
+    int clientfd = accept(socketfd,(struct sockaddr*)&clientaddr,&clientlen);
+    if(clientfd < 0)
+    {
+        perror("accpet error\n");
+    }
+
+    //receive map information from client 
+    while(1){
+    char recvbuf[1024];
+    char temp;// mapid which is sent to the serverA
+    int str1,str2,str3,str4;//sending to C
+    int mapid,star,dst,flsize;
+    for(int i=1;i<=4;i++)
+    {
+        if(i=1)
+        {         
+            recv(clientfd,recvbuf,sizeof(recvbuf),0);
+            temp = recvbuf[0];
+            str1 = recvbuf[0];
+            //printf("str is %d\n",str1);
+            printf("The AWS has received map ID <%s>, ", recvbuf); 
+        }    
+        if(i=2)
+        {   
+            recv(clientfd,recvbuf,sizeof(recvbuf),0);
+            star = atoi(recvbuf); //char→int
+            str2 = star;
+            //printf("str is %d\n",str2);
+            printf("start vertex <%d>, ", star); 
+        } 
+        if(i=3)
+        {  
+           recv(clientfd,recvbuf,sizeof(recvbuf),0); 
+           dst = atoi(recvbuf);
+           str3 = dst;
+           printf("destination vertex <%d>", dst); 
+        }  
+        if(i=4)
+        {   
+            recv(clientfd,recvbuf,sizeof(recvbuf),0);
+            flsize = atoi(recvbuf);
+            str4 = flsize;
+            //printf("str is %d %d %d %d\n",str1,str2,str3,str4);
+            printf(" and file size <%d> from the client using TCP over port 34941\n", flsize);   
+        }      
+        //memset(recvbuf,0,sizeof(recvbuf));
+    }
+
+    // phase 2:send to A B and C 
+    //create UDP socket
+    int awsfd_udp = 0;
+    struct sockaddr_in sockAaddr_udp= {0}; 
+    struct sockaddr_in sockBaddr_udp= {0};
+    struct sockaddr_in sockCaddr_udp= {0};
+    int lenA = sizeof(sockAaddr_udp);
+    int lenB = sizeof(sockBaddr_udp);
+    int lenC = sizeof(sockBaddr_udp);
+    memset(&sockAaddr_udp,0,sizeof(sockAaddr_udp));
+    memset(&sockBaddr_udp,0,sizeof(sockBaddr_udp));
+    memset(&sockCaddr_udp,0,sizeof(sockCaddr_udp));
+
+    if((awsfd_udp = socket(AF_INET, SOCK_DGRAM,0)) == -1)
+    {
+        perror("boot up error\n"); 
+    }
+
+    sockAaddr_udp.sin_family  = AF_INET;
+    sockAaddr_udp.sin_port  = htons(PORTA);
+    sockAaddr_udp.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    sockBaddr_udp.sin_family  = AF_INET;
+    sockBaddr_udp.sin_port  = htons(PORTB);
+    sockBaddr_udp.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    sockCaddr_udp.sin_family  = AF_INET;
+    sockCaddr_udp.sin_port  = htons(PORTC);
+    sockCaddr_udp.sin_addr.s_addr = inet_addr("127.0.0.1");
+    
+    //send mapid to A and wait for responding
+    FILE *fp; // store a specific map information
+    char recvA[1024];
+    char recvB[1024];
+    int flag; //flag = 1：find mapid/flag =0：no mapid
+    if(sendto(awsfd_udp,&temp,sizeof(temp),0,(struct sockaddr*)&sockAaddr_udp,sizeof(sockAaddr_udp))>0)
+    printf("The AWS has sent map ID to server A using UDP over port <%d>\n",PORT2);
+   
+    //receiving response from A and save in "fp"
+    fp = fopen("fp.txt","w");
+    while(1)
+    {
+        recvfrom(awsfd_udp,recvA,sizeof(recvA),0,(struct sockaddr*)&sockAaddr_udp, &lenA);
+        //printf("the recvA is %s\n",recvA);// for debug
+        if(recvA[1]>=65)//receive "stop"/"graph..."
+        break;
+        fputs(recvA,fp);// write a specific map information in "fp"
+    }      
+    fclose(fp);
+
+    fp = fopen("fp.txt","r");
+    char chA[1024];
+    fgets(chA,20,fp);
+    fclose(fp);
+    if( chA[0] > 0  )// find mapid at A
+    {   
+        printf("The AWS has received map information from server A\n");
+        flag = 1;
+        //memset(temp,0,sizeof(temp));
+    }
+    else// not find mapid at A and query B next
+    {
+        sendto(awsfd_udp,&temp,sizeof(temp),0,(struct sockaddr*)&sockBaddr_udp,sizeof(sockBaddr_udp));
+        printf("The AWS has sent map ID to server B using UDP over port <%d>\n",PORT2);
+        fp = fopen("fp.txt","w");
+        while(1)
+        {   
+            recvfrom(awsfd_udp,recvB,sizeof(recvB),0,(struct sockaddr*)&sockBaddr_udp, &lenB)>0;
+            if(recvB[1]>=65)//recv "stop"/"graph..."
+            break;
+            fputs(recvB,fp);
+        }    
+        fclose(fp);
+
+        fp = fopen("fp.txt","r");
+        char chB[1024];
+        fgets(chB,20,fp);
+        if( chB[0] > 0 )// find mapid at B
+        {   
+            printf("The AWS has received map information from server B\n");
+            flag =1;   
+        }
+        else
+        {  
+            recvC.flag=0;//if client receive "0"→ “no mapid”
+            flag=0;
+            send(clientfd,&recvC,sizeof(recvC),0);
+        }
+        //printf("flag = %d\n",flag);
+       
+    }
+    fclose(fp);
+
+    //AWS receives mapid + search for vertex + send C 
+    if(flag == 1)
+    {
+        char ch[1024];
+        int  i=0,a,b,c,s,d=0;
+        int t;
+        fp = fopen("fp.txt","r");
+        while(!feof(fp))
+        {
+            d++;
+            //printf("%d",d); for debug
+            fscanf(fp,"%s",ch); //progressive scan fp
+            a = atoi(ch);
+
+            if((a == star)||(a == dst))
+            {
+                if(a == star) 
+                s=1;// scan source node at first
+                else
+                s=2;// scan destination node at first
+            switch(s)
+            {
+            case 1: a = dst;// continue to scan destination node
+                    while(!feof(fp))
+                    {
+                        fscanf(fp,"%s",ch);
+                        b = atoi(ch);
+                        //printf("b=%d\n",b);
+                        if(a == b)//find destination
+                        {
+                        printf("The source and destination vertex are in the graph\n");
+                        for(t=0;t<4;t++)  // send to C
+                        {
+                        sendto(awsfd_udp,&str1,sizeof(str1),0,(struct sockaddr*)&sockCaddr_udp,sizeof(sockCaddr_udp));
+                        if(t=1)
+                        sendto(awsfd_udp,&str2,sizeof(str2),0,(struct sockaddr*)&sockCaddr_udp,sizeof(sockCaddr_udp));
+                        if(t=2)
+                        sendto(awsfd_udp,&str3,sizeof(str3),0,(struct sockaddr*)&sockCaddr_udp,sizeof(sockCaddr_udp));
+                        if(t=3)
+                        sendto(awsfd_udp,&str4,sizeof(str4),0,(struct sockaddr*)&sockCaddr_udp,sizeof(sockCaddr_udp));
+                        }
+                        printf("The AWS has sent map, source ID, destination ID, propagation speed and transmission speed to server C using UDP over port <33941>\n");
+                        i=3;
+                        break;
+                        }          
+                    }
+                    if(a != b) // cannot find destination
+                    i=1;
+                    fclose(fp);
+                    break;
+
+            case 2: a = star; // continue to scan source node
+                    while(!feof(fp))
+                    {
+                        fscanf(fp,"%s",ch);
+                        c = atoi(ch);
+                        if(a == c) //find source node
+                        {
+                        printf("The source and destination vertex are in the graph\n");
+                        for(t=0;t<4;t++) // send to C
+                        {
+                        sendto(awsfd_udp,&str1,sizeof(str1),0,(struct sockaddr*)&sockCaddr_udp,sizeof(sockCaddr_udp));
+                        if(t=1)
+                        sendto(awsfd_udp,&str2,sizeof(str2),0,(struct sockaddr*)&sockCaddr_udp,sizeof(sockCaddr_udp));
+                        if(t=2)
+                        sendto(awsfd_udp,&str3,sizeof(str3),0,(struct sockaddr*)&sockCaddr_udp,sizeof(sockCaddr_udp));
+                        if(t=3)
+                        sendto(awsfd_udp,&str4,sizeof(str4),0,(struct sockaddr*)&sockCaddr_udp,sizeof(sockCaddr_udp));
+                        }
+                        printf("The AWS has sent map, source ID, destination ID, propagation speed and transmission speed to server C using UDP over port <33941>\n");
+                        i=4;
+                        break;
+                        }      
+                    }
+                    if( a!=c ) // cannot find source node
+                    i=2；
+                    fclose(fp);
+                    break;
+            }
+            break;
+            }
+        }
+        //printf("i= %d\n",i); for debug
+        if(i == 1)// cannot find destination node
+        {
+            recvC.flag = 2;
+            printf("<%d> vertex not found in the graph,sending error to client using TCP over port <34941>\n",dst);
+            send(clientfd,&recvC,sizeof(recvC),0);          
+        }
+        if(i == 2) // cannot find source node
+        {
+            recvC.flag = 3;
+            printf("<%d> vertex not found in the graph,sending error to client using TCP over port <34941>\n",star);
+            send(clientfd,&recvC,sizeof(recvC),0);          
+        }
+        if(i == 0) // cannot find both
+        {
+            recvC.flag = 1;
+            printf("<%d/%d> vertex not found in the graph,sending error to client using TCP over port <34941>\n",star,dst);
+            send(clientfd,&recvC,sizeof(recvC),0);
+        }
+    }
+
+    //Phase 3:receive from C
+    if(recvfrom(awsfd_udp,&recvC,sizeof(recvC),0,(struct sockaddr*)&sockCaddr_udp, &lenC)>0)
+    {
+        recvC.flag = 4;
+        printf("***************************************************************************\n");
+        printf("The AWS has received results form serverC:\n");
+        printf("   Shortest path:");
+        for(int i=0;i<(sizeof(recvC.Path)-1);i++)
+        {
+            if(recvC.Path[i]==str3)
+            break;
+            printf("<%d>--",recvC.Path[i]);   
+        }
+        printf("<%d>\n",str3);   
+        printf("    Shortest distance:<%.2f>km\n",recvC.dist);
+        printf("   Transmission delay:<%f>s\n",recvC.trans);
+        printf("    Propagation delay:<%f>s\n",recvC.prop);
+
+        send(clientfd,&recvC,sizeof(recvC),0);
+        printf("***************************************************************************\n");
+        printf("The AWS has sent calculated results to client using TCP over port <34941>\n");
+    }
+
+    close(socketfd);
+    close(clientfd);
+    }
+    return 0;
+
+}
+
