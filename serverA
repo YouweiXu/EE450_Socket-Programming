@@ -1,0 +1,117 @@
+#include<stdio.h>
+#include<stdlib.h>
+#include<unistd.h>
+#include<errno.h>
+#include<sys/types.h>
+#include<string.h>
+#include<netdb.h>
+#include<netinet/in.h>
+#include<sys/socket.h>
+#include<arpa/inet.h>
+#include<sys/wait.h>
+
+#define PORTA 30941 // serverA portnum
+#define PORT2 33941 // AWS UDP portnum
+
+//**** all codes about UDP connection refer to GreekforGreeks****//
+int main()
+{
+    //UDP connection
+    int sockAfd = 0;
+    struct sockaddr_in sockAaddr_udp = {0}; 
+
+    if((sockAfd = socket(AF_INET, SOCK_DGRAM,0)) == -1)
+    {
+        perror("boot up error\n"); 
+    }
+
+    sockAaddr_udp.sin_family  = AF_INET;
+    sockAaddr_udp.sin_port  = htons(PORTA);
+    sockAaddr_udp.sin_addr.s_addr = inet_addr("127.0.0.1"); //htonl(INADDR_ANY);
+
+    if(bind(sockAfd,(struct sockaddr*)&sockAaddr_udp,sizeof(sockAaddr_udp)) == -1)
+    {
+        perror("bind error\n");
+    }
+    else
+    {
+        printf("The Server A is up and running using UDP on port <30941>\n");
+    }
+
+    // read map1 
+    while(1){
+    FILE *map1;
+    FILE *out_map1;//store the specific map
+    if((map1 = fopen("map1.txt","r")) == NULL)
+    {
+        perror("can't open this file\n");
+        exit(0);
+    }
+    if((out_map1 = fopen("out_map1.txt","w+"))== NULL)
+    {
+        perror("can't open this file\n");
+        exit(0);
+    }
+
+    //receive from AWS 
+    char recvbuf[2]={0};
+    struct sockaddr_in awsfdaddr = {0}; 
+    int len = sizeof(awsfdaddr);
+    if(recvfrom(sockAfd,recvbuf,sizeof(recvbuf),0,(struct sockaddr*)&awsfdaddr, &len)>0)
+    printf("The server A has received input for finding graph of map ID <%s>\n",recvbuf);
+
+    //compare map id and send map data to out_map1
+    char buffer[1024]; 
+    while(!feof(map1))
+    {
+        fgets(buffer,20,map1);
+        //printf("%s\n",buffer);
+        if(buffer[0] == recvbuf[0])
+        { 
+            fputs(buffer,out_map1);
+            while(!feof(map1))
+            {
+                fgets(buffer,20,map1);
+                if(buffer[0]>=65) //A=65 meet another mapid
+                    break;
+                fputs(buffer,out_map1);    
+            }  
+            break;  
+        //printf("%s\n",buffer);
+        }    
+    }
+    fclose(out_map1);
+    //memset(buffer,0,sizeof(buffer));
+
+    //AWS read the out_map1    
+    char sendbuf[1024];
+    out_map1 = fopen("out_map1.txt","r");
+    fgets(sendbuf,20,out_map1);
+    if(sendbuf[0] >= 65)// the out_map1 get mapid
+    {
+        while(!feof(out_map1))
+        {
+            fgets(sendbuf,20,out_map1);
+            //printf("%s\n",sendbuf);
+            sendto(sockAfd,sendbuf,sizeof(sendbuf),0,(struct sockaddr*)&awsfdaddr,sizeof(awsfdaddr));
+        }
+        char ch[]="stop";
+        sendto(sockAfd,ch,sizeof(ch),0,(struct sockaddr*)&awsfdaddr,sizeof(awsfdaddr));
+        printf("The server A has sent Graph to AWS\n");  
+    }
+    else// empty out_map1
+    {
+        printf("The server A does not have the required graph <%s>\n",recvbuf);       
+        char send[] = "Graph not Found";
+        sendto(sockAfd,send,sizeof(send),0,(struct sockaddr*)&awsfdaddr,sizeof(awsfdaddr));
+        printf("The server A has sent 'Graph not Found' to AWS\n");
+      
+    }
+
+    fclose(map1);
+    fclose(out_map1);  
+    close(sockAfd);
+    }
+ 
+    return 0;
+}
