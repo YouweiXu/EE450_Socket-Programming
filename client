@@ -1,0 +1,122 @@
+#include<stdio.h>
+#include<stdlib.h>
+#include<unistd.h>
+#include<errno.h>
+#include<sys/types.h>
+#include<string.h>
+#include<netdb.h>
+#include<netinet/in.h>
+#include<sys/socket.h>
+#include<arpa/inet.h>
+#include<sys/wait.h>
+
+#define PORT1 34941// AWS TCP port number
+
+struct AWS_To_Client
+{
+    char Path[10];
+    float dist;
+    float trans;
+    float prop;
+    int flag; //receiving from AWS
+}recvaws;
+
+//**** all codes about TCP connection refer to GreekforGreeks****//
+int main(int argc,char *argv[])
+{
+    //create TCP socket
+    int sock = 0;
+    int dst;
+    struct sockaddr_in awsaddr = {0};//the addr of aws
+
+    if((sock = socket(AF_INET, SOCK_STREAM,0))>= 0)
+    {
+        printf("The client is up and running.\n");
+    }
+    else
+    {
+        perror("socket error\n");
+    }
+    
+    awsaddr.sin_family  = AF_INET;
+    awsaddr.sin_port  = htons(PORT1);
+    awsaddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+
+    if(connect(sock,(struct sockaddr*)&awsaddr,sizeof(awsaddr))<0)
+    {
+        perror("connect error\n");
+    }
+
+
+    //receive from command line
+    for(int n=1;n <= 4;n++)
+    {
+        char* sendbuf = argv[n];
+
+        if(n=1)
+        {   send(sock,argv[n],sizeof(argv[n]),0);
+            printf("The client has sent query to AWS using TCP:start vertex <%s>, ", argv[2]); 
+        }    
+        if(n=2)
+        {   send(sock,argv[n],sizeof(argv[n]),0);
+            dst=atoi(argv[3]);
+            printf("destination vertex <%s>,", argv[3]); 
+        } 
+        if(n=3)
+        {   send(sock,argv[n],sizeof(argv[n]),0);
+            printf("map ID <%s>,", argv[1]); 
+        }  
+        if(n=4)
+        {   send(sock,argv[n],sizeof(argv[n]),0);
+            printf("file size <%s> \n", argv[4]); 
+        }
+        //memset(sendbuf,0,sizeof(sendbuf));  
+    }
+
+    // receive from AWS
+    if(recv(sock,&recvaws,sizeof(recvaws),0)>0)
+    {
+        if(recvaws.flag==0)
+        {
+            printf("No map id <%s> found\n",argv[1]);
+        }
+        if(recvaws.flag==1)
+        {
+            printf("No vertex id <%s %s> found\n",argv[2],argv[3]);
+        }
+        if(recvaws.flag==2)
+        {
+            printf("No dst vertex id <%s> found\n",argv[3]);
+        }
+        if(recvaws.flag==3)
+        {
+            printf("No src vertex id <%s> found\n",argv[2]);
+        }
+        if(recvaws.flag==4) // src and dst both in one of maps
+        {  
+            float Delay = recvaws.trans+recvaws.prop;
+            //printf("rec is %f,%f,%f\n",recvaws.trans,recvaws.prop,recvaws.dist);// for debug
+            //printf("send is %d,%d,%d\n",recvaws.Path[3],recvaws.Path[4],recvaws.Path[5]);
+            printf("*************************************************************\n");
+            printf("    The client has received results form serverC:\n");
+            printf("-------------------------------------------------------------\n");
+            printf("Source Destination  Min Length    Tt        Tp      Delay\n");
+            printf("-------------------------------------------------------------\n");
+            printf("  %s       %s         %.2f   %f   %f   %.2f\n",argv[2],argv[3],recvaws.dist,recvaws.trans,recvaws.prop,Delay);
+            printf("-------------------------------------------------------------\n");
+            printf("         Shortest path:");
+            for(int i=0;i<(sizeof(recvaws.Path)-1);i++)
+            {
+                if(recvaws.Path[i]==dst)
+                break;
+                printf("<%d>--",recvaws.Path[i]);   
+            }
+            printf("<%d>\n",dst);   
+        }
+    }
+
+    close(sock);
+  
+    return 0;
+}
