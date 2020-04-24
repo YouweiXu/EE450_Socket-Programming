@@ -1,0 +1,292 @@
+#include<stdio.h>
+#include<stdlib.h>
+#include<unistd.h>
+#include<errno.h>
+#include<sys/types.h>
+#include<string.h>
+#include<netdb.h>
+#include<netinet/in.h>
+#include<sys/socket.h>
+#include<arpa/inet.h>
+#include<sys/wait.h>
+
+#define PORTC 32941 // ServerC port number
+#define PORT2 33941 //AWS UDP port number
+#define INFINITY 10000
+
+struct C_To_Aws
+{
+    char Path[10];
+    float distance;
+    float trans;
+    float prop;
+}sendbuf;
+
+// find the position of each element in array[]
+int idx_pos(float array[], int len, float element)
+{
+	for (int i = 0; i < len; i++)
+    {
+        if (element == array[i])
+        return i;
+    }        
+}
+
+//****all codes about Dijkstra Algorithm refer to the CDSN website****//
+void array_fill(float * array, int len, int val) 
+{
+	int i;
+	for (i = 0; i < len; i++) 
+    {
+		array[i] = val;
+	}
+}
+void dijkstra(int n,float graph[][n],float array[],int start,float dist[],int dest) 
+{
+	int* path=(int*)malloc(sizeof(int)*n);
+	float* shortest=(float*)malloc(sizeof(float)*n);
+	float* mark=(float*)malloc(sizeof(float)*n);
+	int min,v,i,j;
+	array_fill(mark,n, 0);
+	array_fill(dist,n, INFINITY);
+
+	for(i=0;i<n;i++) 
+    {
+		dist[i]=graph[start][i];
+		if(i!=start&&dist[i]<INFINITY)path[i]=start;
+		else path[i]=-1;
+	}
+	mark[start]=1;
+	while(1) 
+    {
+		min=INFINITY;v=-1;
+		//find the shortest route
+		for(i=0;i<n;i++) 
+        {
+			if(!mark[i]) 
+            {
+				if(dist[i]<min) {min=dist[i];v=i;}
+			}
+		}
+        //cannot find the shorter route
+		if(v==-1)break; 
+		//refresh the shortest route
+		mark[v]=1;
+		for(i=0;i<n;i++)
+        {
+			if(!mark[i]&&graph[v][i]!=INFINITY&&dist[v]+graph[v][i]<dist[i]) 
+            {
+				dist[i]=dist[v]+graph[v][i];
+				path[i]=v;
+			}
+		}
+	}
+	printf("*************************************************\n");
+	printf("  The Server C has finished the calculation:\n");
+	
+    //print result
+    for(i=0;i<n;i++) 
+	{
+		if(i == start) 
+        continue;
+        if(i == dest)
+        {
+            array_fill(shortest,n, 0);
+            printf("    Shortest distance:<%.2f>km\n",dist[i]);
+            int k=0;
+            int h=0;
+            shortest[k]=i;
+            printf("   Shortest path:");
+            while(path[(int)shortest[k]]!=start) 
+            {
+                k++;
+                shortest[k]=path[(int)shortest[k-1]];
+            }
+            k++;
+            shortest[k]=start;
+            for(j=k;j>0;j--)
+            {   
+                printf("<%d>--",(int)array[(int)shortest[j]]);
+                sendbuf.Path[h]=(int)array[(int)shortest[j]];
+                h++;      
+            }
+            //printf("%d\n",h); 
+            printf("<%d>\n",(int)array[(int)shortest[0]]);
+            sendbuf.Path[h]=(int)array[(int)shortest[0]];
+            printf("    Shortest distance:<%.2f>km\n",dist[i]);
+            sendbuf.distance = dist[i];
+        }
+	}
+	free(path);
+	free(shortest);
+	free(mark);
+	return;
+}
+
+//**** all codes about UDP connection refer to GreekforGreeks****//
+int main()
+{
+    //create UDP socket
+    int nodenum;
+    int sockCfd = 0;
+    struct sockaddr_in sockCaddr_udp = {0}; 
+    struct sockaddr_in awsaddr_udp={0};
+    int len = sizeof(awsaddr_udp);
+    if((sockCfd = socket(AF_INET, SOCK_DGRAM,0)) == -1)
+    {
+        perror("boot up error\n"); 
+    }
+
+    sockCaddr_udp.sin_family  = AF_INET;
+    sockCaddr_udp.sin_port  = htons(PORTC);
+    sockCaddr_udp.sin_addr.s_addr = inet_addr("127.0.0.1"); //htonl(INADDR_ANY);
+
+    if(bind(sockCfd,(struct sockaddr*)&sockCaddr_udp,sizeof(sockCaddr_udp)) == -1)
+    {
+        perror("bind error\n");
+    }
+    else
+    {
+        printf("The Server C is up and running using UDP on port <%d>\n",PORTC);
+    }
+
+    //receive mapid+src+dst+ilesize from AWS
+    while(1){
+    FILE* fp;
+    int recvC;
+    int buffer[5];
+    int i=0,n=0;;  
+    while(recvfrom(sockCfd,&recvC,sizeof(recvC),0,(struct sockaddr*)&awsaddr_udp,&len)>0)
+    {
+        //printf("%d\n",recvC);// for debug     
+        buffer[i] = recvC; 
+        if(i==3)
+        break;
+        i++;
+    }
+
+    //find fize size of fp
+    fp = fopen("fp.txt","r"); 
+    int fsize;
+	fseek(fp, 0L, SEEK_END);
+	fsize = ftell(fp);
+    rewind(fp);
+
+    //progressive scan fp and store in file[] + find the edge num 
+    float file[fsize];
+	for (n = 0; !feof(fp); n++)
+    {
+		fscanf(fp, "%f", &file[n]);
+	}
+	file[n] = '\0';
+    int edge_num = (n-2)/3-1;
+    //printf("%d\n",edge_num);// for debug
+    printf("*************************************************\n");
+    printf(" The server has received data for calculation:\n");
+    printf("     *Propagation Speed:<%.2f>km/s\n",file[0]);
+    printf("     *Transmission Speed:<%d>km/s\n",(int)file[1]);
+    printf("              *map ID:<%c>\n",(char)buffer[0]);
+    printf("     *Source ID:<%d>   Destination ID:<%d>\n",buffer[1],buffer[2]);
+
+    //define Node[] = remove the first two rows(speeds) in file[]
+    float Node[n];
+    for(int b=0;b<n-1;b++)
+        Node[b]=file[b+2];
+
+    //define Nodecpy[] = use for build matrix
+    float Nodecpy[n];
+    for(int q=0;q<n;q++)
+    {
+        Nodecpy[q]=Node[q]; 
+    }
+
+    //set all distance weight = 100 in file[]
+    for(int d=2;d<n-1;d+=3)
+        Node[d]=100;
+
+    //remove the duplicates number in Node[] +find node num
+    int length=sizeof(Node)/sizeof(float);
+    length = length - 6;
+    for(int i = 0;i< 2; i++){
+        for(int i=0;i<length;i++)
+            for(int j=i+1;j<length-1;j++)
+            {
+                if(Node[i]==Node[j])
+                {
+                    for(int k=j;k<=length-1;k++)
+                    {
+                        Node[k]=Node[k+1];
+                    }
+                    length--;
+                }
+            }
+    }
+    nodenum = length-2;
+    //printf("%d\n",nodenum);// for debug 
+    
+    //remove '100'(Node[2]) in Node[]
+    for(int e=2;e<nodenum+1;e++)
+    Node[e]=Node[e+1];
+
+    //matrix constrction
+    //initialize matrix
+    float matrix[nodenum][nodenum];
+    for (int s = 0; s < nodenum; s++)
+	{	
+        for (int t = 0; t < nodenum; t++)
+		{
+            if(s == t)
+            matrix[s][t] = 0 ;
+            else
+            matrix[s][t] = INFINITY ;
+        }
+    }
+    int flag = 0;
+    
+    // fill in the matrix
+	for (int z = 0; z < (n-2); z += 3)
+    {
+        int src = idx_pos(Node, nodenum, Nodecpy[z]);
+		int dst = idx_pos(Node, nodenum, Nodecpy[z+1]);
+		double dis = Nodecpy[z+2];
+        flag++;
+        if(flag <= edge_num )
+        {
+		    matrix[src][dst] = dis;
+		    matrix[dst][src] = dis;
+        }
+    }
+    // for(int h=0;h<(nodenum);h++)
+    // {
+    //     for(int k=0;k<(nodenum);k++)
+    //         printf("%.2f\n",matrix[h][k]);
+    // }
+    
+    //dijkatra algorithm
+    int start = idx_pos(Node, nodenum,(float) buffer[1]);
+    int dest = idx_pos(Node, nodenum,(float) buffer[2]);
+    float dist[nodenum];
+	dijkstra(nodenum,matrix,Node,start,dist,dest);
+
+    //calculate parameters
+    float trans = (float)buffer[3]/file[1];
+    float prop = sendbuf.distance/file[0];
+    sendbuf.trans = trans;
+    sendbuf.prop = prop;
+    printf("   Transmission delay:<%f>s\n",trans);
+    printf("    Propagation delay:<%f>s\n",prop);
+    //printf("send is %d,%d,%d\n",sendbuf.Path[0],sendbuf.Path[3],sendbuf.Path[4]);
+    //printf("sendbuf is %f,%f,%f\n",sendbuf.trans,sendbuf.prop,sendbuf.dist);
+    
+    //send back to AWS
+     if(sendto(sockCfd,&sendbuf,sizeof(sendbuf)+1,0,(struct sockaddr*)&awsaddr_udp,len)>0)
+    {
+         printf("*************************************************\n");
+        printf("The Server C has finished sending the output to AWS\n");
+    }
+    
+    fclose(fp);
+    }
+    
+    return 0;
+}
